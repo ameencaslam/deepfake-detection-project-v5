@@ -22,57 +22,80 @@ logger = logging.getLogger(__name__)
 class DeepfakeSwin(nn.Module):
     def __init__(self):
         super().__init__()
-        # Load pretrained Swin Transformer
+        # Load pretrained model
         self.backbone = timm.create_model(
             'swin_base_patch4_window7_224_in22k',
             pretrained=True,
             num_classes=0
         )
         
-        # Get feature dimension
-        with torch.no_grad():
-            dummy_input = torch.zeros(1, 3, 224, 224)
-            features = self.backbone(dummy_input)
-            feature_dim = features.shape[1]
+        # Get the number of features from the backbone
+        in_features = self.backbone.head.in_features  # 1024 for Swin-Base
         
-        # Create optimized classification head
-        self.classifier = nn.Sequential(
-            nn.LayerNorm(feature_dim),
+        # Replace classifier with optimized head
+        self.backbone.head = nn.Sequential(
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            
+            # First block: in_features -> 1024
+            nn.Linear(in_features, 1024),
+            nn.BatchNorm1d(1024),
+            nn.GELU(),
             nn.Dropout(p=0.5),
             
-            nn.Linear(feature_dim, 1024),
+            # Second block: 1024 -> 512
+            nn.Linear(1024, 512),
+            nn.BatchNorm1d(512),
             nn.GELU(),
-            nn.LayerNorm(1024),
             nn.Dropout(p=0.4),
             
-            nn.Linear(1024, 512),
+            # Third block: 512 -> 256
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
             nn.GELU(),
-            nn.LayerNorm(512),
             nn.Dropout(p=0.3),
             
-            nn.Linear(512, 256),
-            nn.GELU(),
-            nn.LayerNorm(256),
-            nn.Dropout(p=0.2),
-            
+            # Output layer: 256 -> 1
             nn.Linear(256, 1)
         )
         
         self._init_weights()
     
     def _init_weights(self):
-        for m in self.classifier.modules():
+        """Initialize the weights of the classifier head"""
+        for m in self.backbone.head.modules():
             if isinstance(m, nn.Linear):
-                nn.init.trunc_normal_(m.weight, std=0.02)
+                nn.init.trunc_normal_(m.weight, std=.02)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.LayerNorm):
-                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm1d):
                 nn.init.constant_(m.weight, 1.0)
+                nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
         features = self.backbone(x)
-        return self.classifier(features)
+        return self.backbone.head(features)
+    
+    def get_optimizer(self):
+        """Get optimizer with different learning rates for backbone and classifier"""
+        # Separate backbone and classifier parameters
+        backbone_params = []
+        classifier_params = []
+        
+        # All parameters before the final classifier
+        for name, param in self.backbone.named_parameters():
+            if 'head.' in name:
+                classifier_params.append(param)
+            else:
+                backbone_params.append(param)
+        
+        # Create optimizer with different learning rates
+        optimizer = torch.optim.AdamW([
+            {'params': backbone_params, 'lr': 1e-5},  # Lower LR for backbone
+            {'params': classifier_params, 'lr': 1e-4}  # Higher LR for classifier
+        ], weight_decay=0.01)
+        
+        return optimizer
 
 class DeepfakeTrainer:
     def __init__(self, model, train_loader, val_loader, test_loader, device):
@@ -88,10 +111,10 @@ class DeepfakeTrainer:
         classifier_params = []
         
         for name, param in model.named_parameters():
-            if 'classifier' in name:
-                classifier_params.append(param)
-            else:
+            if 'backbone' in name:
                 backbone_params.append(param)
+            else:
+                classifier_params.append(param)
         
         self.optimizer = torch.optim.AdamW([
             {'params': backbone_params, 'lr': 1e-5},
@@ -109,18 +132,18 @@ class DeepfakeTrainer:
         self.val_accuracies = []
     
     def _init_weights(self):
-        for m in self.classifier.modules():
+        for m in self.backbone.head.modules():
             if isinstance(m, nn.Linear):
                 nn.init.trunc_normal_(m.weight, std=0.02)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.LayerNorm):
+            elif isinstance(m, nn.BatchNorm1d):
                 nn.init.constant_(m.bias, 0)
                 nn.init.constant_(m.weight, 1.0)
     
     def forward(self, x):
         features = self.backbone(x)
-        return self.classifier(features)
+        return self.backbone.head(features)
     
     def train_epoch(self, epoch):
         self.model.train()
@@ -288,7 +311,12 @@ class DeepfakeTrainer:
             # Model checkpoint
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
+                
+                # Save GPU version (existing MLflow logging)
                 mlflow.pytorch.log_model(self.model, "best_model")
+                
+                # Save CPU-compatible version directly
+                torch.save(self.model.state_dict(), "best_model_cpu.pth", map_location='cpu')
             
             # Learning rate scheduling
             self.scheduler.step(val_loss)

@@ -27,65 +27,69 @@ class DeepfakeEfficientNet(nn.Module):
         self.backbone = EfficientNet.from_pretrained('efficientnet-b3')
         
         # Get the number of features from the backbone
-        in_features = self.backbone._fc.in_features
+        in_features = self.backbone._fc.in_features  # 1536 for B3
         
         # Replace classifier with optimized head
         self.backbone._fc = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),  # Added adaptive pooling
+            nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.BatchNorm1d(in_features),
+            
+            # First block: in_features -> 1024
+            nn.Linear(in_features, 1024),
+            nn.BatchNorm1d(1024),
+            nn.GELU(),
             nn.Dropout(p=0.5),
             
-            nn.Linear(in_features, 1024),
-            nn.GELU(),  # Changed from ReLU to GELU
-            nn.BatchNorm1d(1024),
+            # Second block: 1024 -> 512
+            nn.Linear(1024, 512),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
             nn.Dropout(p=0.4),
             
-            nn.Linear(1024, 512),
+            # Third block: 512 -> 256
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
             nn.GELU(),
-            nn.BatchNorm1d(512),
             nn.Dropout(p=0.3),
             
-            nn.Linear(512, 256),
-            nn.GELU(),
-            nn.BatchNorm1d(256),
-            nn.Dropout(p=0.2),
-            
+            # Output layer: 256 -> 1
             nn.Linear(256, 1)
         )
         
         self._init_weights()
     
     def _init_weights(self):
+        """Initialize the weights of the classifier head"""
         for m in self.backbone._fc.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
+                nn.init.trunc_normal_(m.weight, std=.02)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.weight, 1.0)
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
         return self.backbone(x)
     
     def get_optimizer(self):
-        # Different learning rates for backbone and classifier
+        """Get optimizer with different learning rates for backbone and classifier"""
+        # Separate backbone and classifier parameters
         backbone_params = []
         classifier_params = []
         
-        # Separate backbone and classifier parameters
-        for name, param in self.named_parameters():
-            if '_fc' in name:
+        # All parameters before the final classifier
+        for name, param in self.backbone.named_parameters():
+            if '_fc.' in name:
                 classifier_params.append(param)
             else:
                 backbone_params.append(param)
         
         # Create optimizer with different learning rates
         optimizer = torch.optim.AdamW([
-            {'params': backbone_params, 'lr': 1e-5, 'weight_decay': 0.01},  # Added weight decay
-            {'params': classifier_params, 'lr': 5e-5, 'weight_decay': 0.01}  # Added weight decay
-        ])
+            {'params': backbone_params, 'lr': 1e-5},  # Lower LR for backbone
+            {'params': classifier_params, 'lr': 1e-4}  # Higher LR for classifier
+        ], weight_decay=0.01)
         
         return optimizer
 
@@ -274,7 +278,12 @@ class DeepfakeTrainer:
             # Model checkpoint
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                mlflow.pytorch.log_model(self.model, "best_model")
+                
+                # Save GPU version (existing MLflow logging)
+            mlflow.pytorch.log_model(self.model, "best_model")
+                
+                # Save CPU-compatible version directly
+                torch.save(self.model.state_dict(), "best_model_cpu.pth", map_location='cpu')
             
             # Learning rate scheduling
             self.scheduler.step(val_loss)
