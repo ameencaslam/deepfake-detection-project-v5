@@ -24,13 +24,13 @@ class DeepfakeEfficientNet(nn.Module):
     def __init__(self):
         super().__init__()
         # Load pretrained model
-        self.backbone = EfficientNet.from_pretrained('efficientnet-b3')
+        self.backbone = EfficientNet.from_pretrained('efficientnet-b3', num_classes=0)
         
         # Get the number of features from the backbone
-        in_features = self.backbone._fc.in_features  # 1536 for B3
+        in_features = 1536  # B3 features
         
-        # Replace classifier with optimized head
-        self.backbone._fc = nn.Sequential(
+        # Create classifier head
+        self.classifier = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             
@@ -60,7 +60,7 @@ class DeepfakeEfficientNet(nn.Module):
     
     def _init_weights(self):
         """Initialize the weights of the classifier head"""
-        for m in self.backbone._fc.modules():
+        for m in self.classifier.modules():
             if isinstance(m, nn.Linear):
                 nn.init.trunc_normal_(m.weight, std=.02)
                 if m.bias is not None:
@@ -70,7 +70,10 @@ class DeepfakeEfficientNet(nn.Module):
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
-        return self.backbone(x)
+        # Extract features
+        features = self.backbone.extract_features(x)
+        # Apply classifier
+        return self.classifier(features)
     
     def get_optimizer(self):
         """Get optimizer with different learning rates for backbone and classifier"""
@@ -79,8 +82,8 @@ class DeepfakeEfficientNet(nn.Module):
         classifier_params = []
         
         # All parameters before the final classifier
-        for name, param in self.backbone.named_parameters():
-            if '_fc.' in name:
+        for name, param in self.named_parameters():
+            if 'classifier.' in name:
                 classifier_params.append(param)
             else:
                 backbone_params.append(param)

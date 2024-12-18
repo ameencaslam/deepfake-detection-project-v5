@@ -24,17 +24,18 @@ class DeepfakeSwin(nn.Module):
         super().__init__()
         # Load pretrained model
         self.backbone = timm.create_model(
-            'swin_base_patch4_window7_224_in22k',
+            'swin_base_patch4_window7_224',
             pretrained=True,
-            num_classes=0
+            num_classes=0,
+            global_pool=''  # Disable global pooling
         )
         
         # Get the number of features from the backbone
-        in_features = self.backbone.head.in_features  # 1024 for Swin-Base
+        in_features = 1024  # Swin-Base features
         
-        # Replace classifier with optimized head
-        self.backbone.head = nn.Sequential(
-            nn.AdaptiveAvgPool1d(1),
+        # Create classifier head
+        self.classifier = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             
             # First block: in_features -> 1024
@@ -63,7 +64,7 @@ class DeepfakeSwin(nn.Module):
     
     def _init_weights(self):
         """Initialize the weights of the classifier head"""
-        for m in self.backbone.head.modules():
+        for m in self.classifier.modules():
             if isinstance(m, nn.Linear):
                 nn.init.trunc_normal_(m.weight, std=.02)
                 if m.bias is not None:
@@ -73,8 +74,10 @@ class DeepfakeSwin(nn.Module):
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
-        features = self.backbone(x)
-        return self.backbone.head(features)
+        # Extract features
+        features = self.backbone.forward_features(x)
+        # Apply classifier
+        return self.classifier(features)
     
     def get_optimizer(self):
         """Get optimizer with different learning rates for backbone and classifier"""
@@ -83,8 +86,8 @@ class DeepfakeSwin(nn.Module):
         classifier_params = []
         
         # All parameters before the final classifier
-        for name, param in self.backbone.named_parameters():
-            if 'head.' in name:
+        for name, param in self.named_parameters():
+            if 'classifier.' in name:
                 classifier_params.append(param)
             else:
                 backbone_params.append(param)
