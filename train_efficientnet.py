@@ -232,27 +232,34 @@ class DeepfakeTrainer:
         # Create directory for artifacts if it doesn't exist
         Path("model_artifacts").mkdir(exist_ok=True)
         
-        # Generate model summary using torchinfo
-        model_stats = torchinfo.summary(
-            self.model, 
-            input_size=(1, 3, 300, 300),  # EfficientNet-B3 optimal size
-            verbose=0,
-            device=self.device
-        )
+        try:
+            # Generate model summary using torchinfo with batch_size=2 (to avoid BatchNorm error)
+            model_stats = torchinfo.summary(
+                self.model, 
+                input_size=(2, 3, 224, 224),  # Changed batch size to 2
+                verbose=0,
+                device=self.device
+            )
+            
+            # Save model summary to file
+            with open("model_artifacts/model_summary.txt", "w") as f:
+                f.write(str(model_stats))
+            
+            # Generate model visualization using torchviz
+            dummy_input = torch.zeros(2, 3, 224, 224, device=self.device)  # Changed batch size to 2
+            with torch.no_grad():
+                output = self.model(dummy_input)
+                dot = make_dot(output, params=dict(self.model.named_parameters()))
+                dot.render("model_artifacts/model_architecture", format="png")
+            
+            # Log artifacts to MLflow
+            mlflow.log_artifact("model_artifacts/model_summary.txt")
+            mlflow.log_artifact("model_artifacts/model_architecture.png")
         
-        # Save model summary to file
-        with open("model_artifacts/model_summary.txt", "w") as f:
-            f.write(str(model_stats))
-        
-        # Generate model visualization using torchviz
-        dummy_input = torch.zeros(1, 3, 300, 300, device=self.device)  # EfficientNet-B3 size
-        output = self.model(dummy_input)
-        dot = make_dot(output, params=dict(self.model.named_parameters()))
-        dot.render("model_artifacts/model_architecture", format="png")
-        
-        # Log artifacts to MLflow
-        mlflow.log_artifact("model_artifacts/model_summary.txt")
-        mlflow.log_artifact("model_artifacts/model_architecture.png")
+        except Exception as e:
+            logger.warning(f"Failed to log model architecture: {str(e)}")
+            # Continue training even if visualization fails
+            pass
     
     def train(self, num_epochs):
         best_val_loss = float('inf')
