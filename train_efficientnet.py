@@ -12,6 +12,9 @@ from data_handler import get_dataloaders
 import logging
 import os
 from tqdm import tqdm
+from torchviz import make_dot
+import torchinfo
+from pathlib import Path
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -20,30 +23,37 @@ logger = logging.getLogger(__name__)
 class DeepfakeEfficientNet(nn.Module):
     def __init__(self):
         super().__init__()
-        # Load pretrained model (changed from b0 to b3)
-        self.backbone = EfficientNet.from_pretrained(
-            'efficientnet-b3'
-        )
+        # Load pretrained model
+        self.backbone = EfficientNet.from_pretrained('efficientnet-b3')
         
         # Get the number of features from the backbone
         in_features = self.backbone._fc.in_features
         
-        # Replace classifier with custom head
+        # Replace classifier with optimized head
         self.backbone._fc = nn.Sequential(
-            nn.BatchNorm1d(in_features),  # Added normalization
+            nn.AdaptiveAvgPool2d(1),  # Added adaptive pooling
+            nn.Flatten(),
+            nn.BatchNorm1d(in_features),
             nn.Dropout(p=0.5),
-            nn.Linear(in_features, 1024),  # Increased from 512 to 1024 for B3
+            
+            nn.Linear(in_features, 1024),
+            nn.GELU(),  # Changed from ReLU to GELU
             nn.BatchNorm1d(1024),
-            nn.ReLU(inplace=True),
             nn.Dropout(p=0.4),
+            
             nn.Linear(1024, 512),
+            nn.GELU(),
             nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
             nn.Dropout(p=0.3),
-            nn.Linear(512, 1)
+            
+            nn.Linear(512, 256),
+            nn.GELU(),
+            nn.BatchNorm1d(256),
+            nn.Dropout(p=0.2),
+            
+            nn.Linear(256, 1)
         )
         
-        # Initialize the new layers
         self._init_weights()
     
     def _init_weights(self):
@@ -72,10 +82,10 @@ class DeepfakeEfficientNet(nn.Module):
                 backbone_params.append(param)
         
         # Create optimizer with different learning rates
-        optimizer = torch.optim.Adam([
-            {'params': backbone_params, 'lr': 1e-5},  # Slightly lower LR for B3
-            {'params': classifier_params, 'lr': 5e-5}  # Adjusted LR for larger model
-        ], weight_decay=1e-5)
+        optimizer = torch.optim.AdamW([
+            {'params': backbone_params, 'lr': 1e-5, 'weight_decay': 0.01},  # Added weight decay
+            {'params': classifier_params, 'lr': 5e-5, 'weight_decay': 0.01}  # Added weight decay
+        ])
         
         return optimizer
 
@@ -87,10 +97,16 @@ class DeepfakeTrainer:
         self.test_loader = test_loader
         self.device = device
         self.criterion = nn.BCEWithLogitsLoss()
-        self.optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+        self.optimizer = model.get_optimizer()
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, mode='min', patience=3, factor=0.1
         )
+        
+        # Add these to store learning curves data
+        self.train_losses = []
+        self.train_accuracies = []
+        self.val_losses = []
+        self.val_accuracies = []
     
     def train_epoch(self, epoch):
         self.model.train()
@@ -171,12 +187,81 @@ class DeepfakeTrainer:
         mlflow.log_figure(plt.gcf(), f'{phase}_roc_curve.png')
         plt.close()
     
+    def plot_learning_curves(self):
+        """Plot and save learning curves."""
+        epochs = range(len(self.train_losses))
+        
+        # Create figure with secondary y-axis
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        ax2 = ax1.twinx()
+        
+        # Plot losses
+        ax1.plot(epochs, self.train_losses, 'b-', label='Training Loss')
+        ax1.plot(epochs, self.val_losses, 'b--', label='Validation Loss')
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Loss', color='b')
+        ax1.tick_params(axis='y', labelcolor='b')
+        
+        # Plot accuracies
+        ax2.plot(epochs, self.train_accuracies, 'r-', label='Training Accuracy')
+        ax2.plot(epochs, self.val_accuracies, 'r--', label='Validation Accuracy')
+        ax2.set_ylabel('Accuracy', color='r')
+        ax2.tick_params(axis='y', labelcolor='r')
+        
+        # Add legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='center right')
+        
+        plt.title('Training and Validation Metrics')
+        plt.tight_layout()
+        
+        # Log the figure to MLflow
+        mlflow.log_figure(fig, "learning_curves.png")
+        plt.close()
+    
+    def log_model_architecture(self):
+        """Log model architecture visualization and summary."""
+        # Create directory for artifacts if it doesn't exist
+        Path("model_artifacts").mkdir(exist_ok=True)
+        
+        # Generate model summary using torchinfo
+        model_stats = torchinfo.summary(
+            self.model, 
+            input_size=(1, 3, 300, 300),  # EfficientNet-B3 optimal size
+            verbose=0,
+            device=self.device
+        )
+        
+        # Save model summary to file
+        with open("model_artifacts/model_summary.txt", "w") as f:
+            f.write(str(model_stats))
+        
+        # Generate model visualization using torchviz
+        dummy_input = torch.zeros(1, 3, 300, 300, device=self.device)  # EfficientNet-B3 size
+        output = self.model(dummy_input)
+        dot = make_dot(output, params=dict(self.model.named_parameters()))
+        dot.render("model_artifacts/model_architecture", format="png")
+        
+        # Log artifacts to MLflow
+        mlflow.log_artifact("model_artifacts/model_summary.txt")
+        mlflow.log_artifact("model_artifacts/model_architecture.png")
+    
     def train(self, num_epochs):
         best_val_loss = float('inf')
+        
+        # Log model architecture at the start of training
+        self.log_model_architecture()
         
         for epoch in range(num_epochs):
             train_loss, train_acc, train_preds, train_targets = self.train_epoch(epoch)
             val_loss, val_acc, val_preds, val_targets = self.validate(self.val_loader)
+            
+            # Store metrics for learning curves
+            self.train_losses.append(train_loss)
+            self.train_accuracies.append(train_acc)
+            self.val_losses.append(val_loss)
+            self.val_accuracies.append(val_acc)
             
             # Log metrics
             self.log_metrics(epoch, train_loss, train_acc, val_loss, val_acc)
@@ -197,6 +282,9 @@ class DeepfakeTrainer:
             logger.info(f'Epoch {epoch}: Train Loss={train_loss:.4f}, '
                        f'Train Acc={train_acc:.4f}, Val Loss={val_loss:.4f}, '
                        f'Val Acc={val_acc:.4f}')
+        
+        # Plot learning curves at the end of training
+        self.plot_learning_curves()
     
     def test(self):
         test_loss, test_acc, test_preds, test_targets = self.validate(self.test_loader)
@@ -217,7 +305,7 @@ def main():
     mlflow.set_experiment('deepfake_efficientnet')
     
     # Configuration
-    DATA_DIR = '/kaggle/input/3body-filtered-v2-10k'  # Adjust as needed
+    DATA_DIR = '/kaggle/input/2body-images-10k-split'  # Adjust as needed
     IMAGE_SIZE = 300  # EfficientNet-B3 optimal size
     BATCH_SIZE = 32  # Reduced batch size for larger model
     NUM_EPOCHS = 15
@@ -235,10 +323,10 @@ def main():
             'image_size': IMAGE_SIZE,
             'batch_size': BATCH_SIZE,
             'num_epochs': NUM_EPOCHS,
-            'optimizer': 'Adam',
+            'optimizer': 'AdamW',
             'backbone_lr': 1e-5,
             'classifier_lr': 5e-5,
-            'weight_decay': 1e-5
+            'weight_decay': 0.01
         })
         
         # Create and train model

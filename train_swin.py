@@ -11,6 +11,9 @@ from data_handler import get_dataloaders
 import logging
 import os
 from tqdm import tqdm
+from torchviz import make_dot
+import torchinfo
+from pathlib import Path
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -23,7 +26,7 @@ class DeepfakeSwin(nn.Module):
         self.backbone = timm.create_model(
             'swin_base_patch4_window7_224_in22k',
             pretrained=True,
-            num_classes=0  # Remove classification head
+            num_classes=0
         )
         
         # Get feature dimension
@@ -32,22 +35,26 @@ class DeepfakeSwin(nn.Module):
             features = self.backbone(dummy_input)
             feature_dim = features.shape[1]
         
-        # Create custom classification head
+        # Create optimized classification head
         self.classifier = nn.Sequential(
             nn.LayerNorm(feature_dim),
             nn.Dropout(p=0.5),
+            
             nn.Linear(feature_dim, 1024),
+            nn.GELU(),
             nn.LayerNorm(1024),
-            nn.GELU(),
             nn.Dropout(p=0.4),
+            
             nn.Linear(1024, 512),
+            nn.GELU(),
             nn.LayerNorm(512),
-            nn.GELU(),
             nn.Dropout(p=0.3),
+            
             nn.Linear(512, 256),
-            nn.LayerNorm(256),
             nn.GELU(),
+            nn.LayerNorm(256),
             nn.Dropout(p=0.2),
+            
             nn.Linear(256, 1)
         )
         
@@ -94,6 +101,26 @@ class DeepfakeTrainer:
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, mode='min', patience=3, factor=0.1
         )
+        
+        # Add these to store learning curves data
+        self.train_losses = []
+        self.train_accuracies = []
+        self.val_losses = []
+        self.val_accuracies = []
+    
+    def _init_weights(self):
+        for m in self.classifier.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.trunc_normal_(m.weight, std=0.02)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.constant_(m.bias, 0)
+                nn.init.constant_(m.weight, 1.0)
+    
+    def forward(self, x):
+        features = self.backbone(x)
+        return self.classifier(features)
     
     def train_epoch(self, epoch):
         self.model.train()
@@ -174,12 +201,81 @@ class DeepfakeTrainer:
         mlflow.log_figure(plt.gcf(), f'{phase}_roc_curve.png')
         plt.close()
     
+    def plot_learning_curves(self):
+        """Plot and save learning curves."""
+        epochs = range(len(self.train_losses))
+        
+        # Create figure with secondary y-axis
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        ax2 = ax1.twinx()
+        
+        # Plot losses
+        ax1.plot(epochs, self.train_losses, 'b-', label='Training Loss')
+        ax1.plot(epochs, self.val_losses, 'b--', label='Validation Loss')
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Loss', color='b')
+        ax1.tick_params(axis='y', labelcolor='b')
+        
+        # Plot accuracies
+        ax2.plot(epochs, self.train_accuracies, 'r-', label='Training Accuracy')
+        ax2.plot(epochs, self.val_accuracies, 'r--', label='Validation Accuracy')
+        ax2.set_ylabel('Accuracy', color='r')
+        ax2.tick_params(axis='y', labelcolor='r')
+        
+        # Add legend
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='center right')
+        
+        plt.title('Training and Validation Metrics')
+        plt.tight_layout()
+        
+        # Log the figure to MLflow
+        mlflow.log_figure(fig, "learning_curves.png")
+        plt.close()
+    
+    def log_model_architecture(self):
+        """Log model architecture visualization and summary."""
+        # Create directory for artifacts if it doesn't exist
+        Path("model_artifacts").mkdir(exist_ok=True)
+        
+        # Generate model summary using torchinfo
+        model_stats = torchinfo.summary(
+            self.model, 
+            input_size=(1, 3, 224, 224),
+            verbose=0,
+            device=self.device
+        )
+        
+        # Save model summary to file
+        with open("model_artifacts/model_summary.txt", "w") as f:
+            f.write(str(model_stats))
+        
+        # Generate model visualization using torchviz
+        dummy_input = torch.zeros(1, 3, 224, 224, device=self.device)
+        output = self.model(dummy_input)
+        dot = make_dot(output, params=dict(self.model.named_parameters()))
+        dot.render("model_artifacts/model_architecture", format="png")
+        
+        # Log artifacts to MLflow
+        mlflow.log_artifact("model_artifacts/model_summary.txt")
+        mlflow.log_artifact("model_artifacts/model_architecture.png")
+    
     def train(self, num_epochs):
         best_val_loss = float('inf')
+        
+        # Log model architecture at the start of training
+        self.log_model_architecture()
         
         for epoch in range(num_epochs):
             train_loss, train_acc, train_preds, train_targets = self.train_epoch(epoch)
             val_loss, val_acc, val_preds, val_targets = self.validate(self.val_loader)
+            
+            # Store metrics for learning curves
+            self.train_losses.append(train_loss)
+            self.train_accuracies.append(train_acc)
+            self.val_losses.append(val_loss)
+            self.val_accuracies.append(val_acc)
             
             # Log metrics
             self.log_metrics(epoch, train_loss, train_acc, val_loss, val_acc)
@@ -200,6 +296,9 @@ class DeepfakeTrainer:
             logger.info(f'Epoch {epoch}: Train Loss={train_loss:.4f}, '
                        f'Train Acc={train_acc:.4f}, Val Loss={val_loss:.4f}, '
                        f'Val Acc={val_acc:.4f}')
+        
+        # Plot learning curves at the end of training
+        self.plot_learning_curves()
     
     def test(self):
         test_loss, test_acc, test_preds, test_targets = self.validate(self.test_loader)
@@ -220,10 +319,10 @@ def main():
     mlflow.set_experiment('deepfake_swin')
     
     # Configuration
-    DATA_DIR = '/kaggle/input/3body-filtered-v2-10k'  # Adjust as needed
+    DATA_DIR = '/kaggle/input/2body-images-10k-split'
     IMAGE_SIZE = 224
     BATCH_SIZE = 32
-    NUM_EPOCHS = 15 #Change in future for main run
+    NUM_EPOCHS = 15
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Get data

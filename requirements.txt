@@ -13,5 +13,7 @@ pandas
 timm
 efficientnet-pytorch
 mlflow
-kaggle
 python-multipart
+torchviz
+graphviz
+torchinfo
