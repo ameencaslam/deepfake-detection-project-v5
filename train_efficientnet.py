@@ -280,7 +280,7 @@ class DeepfakeTrainer:
                 best_val_loss = val_loss
                 
                 # Save GPU version (existing MLflow logging)
-            mlflow.pytorch.log_model(self.model, "best_model")
+                mlflow.pytorch.log_model(self.model, "best_model")
                 
                 # Save CPU-compatible version directly
                 torch.save(self.model.state_dict(), "best_model_cpu.pth", map_location='cpu')
