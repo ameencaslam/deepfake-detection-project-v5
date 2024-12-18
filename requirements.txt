@@ -1,0 +1,17 @@
+streamlit
+torch
+torchvision
+numpy
+Pillow
+opencv-python-headless
+mediapipe
+scikit-learn
+matplotlib
+seaborn
+tqdm
+pandas
+timm
+efficientnet-pytorch
+mlflow
+kaggle
+python-multipart
