@@ -264,6 +264,10 @@ class DeepfakeTrainer:
     def train(self, num_epochs):
         best_val_loss = float('inf')
         
+        # Create model directory
+        model_dir = Path("models/efficientnet")
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
         # Log model architecture at the start of training
         self.log_model_architecture()
         
@@ -292,10 +296,11 @@ class DeepfakeTrainer:
                 # Save GPU version (existing MLflow logging)
                 mlflow.pytorch.log_model(self.model, "best_model")
                 
-                # Save CPU-compatible version directly
+                # Save CPU-compatible version with timestamp and metrics
+                model_path = model_dir / f"efficientnet_best_val{val_acc:.4f}_epoch{epoch}.pth"
                 torch.save(
                     self.model.state_dict(), 
-                    "best_model_cpu.pth", 
+                    str(model_path), 
                     _use_new_zipfile_serialization=False
                 )
             
