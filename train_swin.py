@@ -74,7 +74,9 @@ class DeepfakeSwin(nn.Module):
     
     def forward(self, x):
         # Get features from Swin backbone
-        features = self.backbone.forward_features(x)  # [B, C, H, W]
+        features = self.backbone.forward_features(x)  # [B, H, W, C]
+        # Permute dimensions to [B, C, H, W]
+        features = features.permute(0, 3, 1, 2)
         # Apply classifier (handles normalization, pooling, and classification)
         return self.classifier(features)
     
