@@ -11,8 +11,6 @@ from data_handler import get_dataloaders
 import logging
 import os
 from tqdm import tqdm
-from torchviz import make_dot
-import torchinfo
 from pathlib import Path
 
 # Setup logging
@@ -261,49 +259,12 @@ class DeepfakeTrainer:
         mlflow.log_figure(fig, "learning_curves.png")
         plt.close()
     
-    def log_model_architecture(self):
-        """Log model architecture visualization and summary."""
-        # Create directory for artifacts if it doesn't exist
-        Path("model_artifacts").mkdir(exist_ok=True)
-        
-        try:
-            # Generate model summary using torchinfo with batch_size=2
-            model_stats = torchinfo.summary(
-                self.model, 
-                input_size=(2, 3, 224, 224),  # Changed batch size to 2
-                verbose=0,
-                device=self.device
-            )
-            
-            # Save model summary to file
-            with open("model_artifacts/model_summary.txt", "w") as f:
-                f.write(str(model_stats))
-            
-            # Generate model visualization using torchviz
-            dummy_input = torch.zeros(2, 3, 224, 224, device=self.device)  # Changed batch size to 2
-            with torch.no_grad():
-                output = self.model(dummy_input)
-                dot = make_dot(output, params=dict(self.model.named_parameters()))
-                dot.render("model_artifacts/model_architecture", format="png")
-            
-            # Log artifacts to MLflow
-            mlflow.log_artifact("model_artifacts/model_summary.txt")
-            mlflow.log_artifact("model_artifacts/model_architecture.png")
-        
-        except Exception as e:
-            logger.warning(f"Failed to log model architecture: {str(e)}")
-            # Continue training even if visualization fails
-            pass
-    
     def train(self, num_epochs):
         best_val_loss = float('inf')
         
         # Create model directory
         model_dir = Path("models/swin")
         model_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Log model architecture at the start of training
-        self.log_model_architecture()
         
         for epoch in range(num_epochs):
             train_loss, train_acc, train_preds, train_targets = self.train_epoch(epoch)
@@ -370,7 +331,7 @@ def main():
     DATA_DIR = '/kaggle/input/2body-images-10k-split'
     IMAGE_SIZE = 224
     BATCH_SIZE = 32
-    NUM_EPOCHS = 15
+    NUM_EPOCHS = 20
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Get data
