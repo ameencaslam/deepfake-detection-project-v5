@@ -293,7 +293,11 @@ class DeepfakeTrainer:
                 mlflow.pytorch.log_model(self.model, "best_model")
                 
                 # Save CPU-compatible version directly
-                torch.save(self.model.state_dict(), "best_model_cpu.pth", map_location='cpu')
+                torch.save(
+                    self.model.state_dict(), 
+                    "best_model_cpu.pth", 
+                    _use_new_zipfile_serialization=False
+                )
             
             # Learning rate scheduling
             self.scheduler.step(val_loss)

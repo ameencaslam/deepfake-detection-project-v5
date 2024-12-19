@@ -26,37 +26,35 @@ class DeepfakeSwin(nn.Module):
         self.backbone = timm.create_model(
             'swin_base_patch4_window7_224',
             pretrained=True,
-            num_classes=0,
+            num_classes=0,  # Remove classification head
             global_pool=''  # Disable global pooling
         )
         
         # Get the number of features from the backbone
         in_features = 1024  # Swin-Base features
         
-        # Create classifier head
+        # Create classifier head with proper handling of spatial dimensions
         self.classifier = nn.Sequential(
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
+            # First handle the spatial dimensions
+            nn.AdaptiveAvgPool2d((1, 1)),  # Reduces spatial dimensions to 1x1
+            nn.Flatten(),  # Flatten to [batch_size, features]
             
-            # First block: in_features -> 1024
+            # Then apply the classification layers
             nn.Linear(in_features, 1024),
             nn.BatchNorm1d(1024),
             nn.GELU(),
             nn.Dropout(p=0.5),
             
-            # Second block: 1024 -> 512
             nn.Linear(1024, 512),
             nn.BatchNorm1d(512),
             nn.GELU(),
             nn.Dropout(p=0.4),
             
-            # Third block: 512 -> 256
             nn.Linear(512, 256),
             nn.BatchNorm1d(256),
             nn.GELU(),
             nn.Dropout(p=0.3),
             
-            # Output layer: 256 -> 1
             nn.Linear(256, 1)
         )
         
@@ -74,9 +72,9 @@ class DeepfakeSwin(nn.Module):
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
-        # Extract features
+        # Extract features - output shape: [batch_size, channels, height, width]
         features = self.backbone.forward_features(x)
-        # Apply classifier
+        # Apply classifier - handles spatial dimensions and classification
         return self.classifier(features)
     
     def get_optimizer(self):
@@ -326,7 +324,11 @@ class DeepfakeTrainer:
                 mlflow.pytorch.log_model(self.model, "best_model")
                 
                 # Save CPU-compatible version directly
-                torch.save(self.model.state_dict(), "best_model_cpu.pth", map_location='cpu')
+                torch.save(
+                    self.model.state_dict(), 
+                    "best_model_cpu.pth", 
+                    _use_new_zipfile_serialization=False
+                )
             
             # Learning rate scheduling
             self.scheduler.step(val_loss)
