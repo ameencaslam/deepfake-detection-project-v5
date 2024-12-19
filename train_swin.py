@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class DeepfakeSwin(nn.Module):
     def __init__(self):
         super().__init__()
-        # Load pretrained model
+        # Load pretrained Swin Transformer
         self.backbone = timm.create_model(
             'swin_base_patch4_window7_224',
             pretrained=True,
@@ -30,16 +30,17 @@ class DeepfakeSwin(nn.Module):
             global_pool=''  # Disable global pooling
         )
         
-        # Get the number of features from the backbone
-        in_features = 1024  # Swin-Base features
+        # Get number of features from Swin-Base
+        in_features = 1024
         
-        # Create classifier head with proper handling of spatial dimensions
+        # Create classifier head
         self.classifier = nn.Sequential(
-            # First handle the spatial dimensions
-            nn.AdaptiveAvgPool2d((1, 1)),  # Reduces spatial dimensions to 1x1
-            nn.Flatten(),  # Flatten to [batch_size, features]
+            # Spatial dimension handling
+            nn.LayerNorm([in_features, 7, 7]),  # Normalize features
+            nn.AdaptiveAvgPool2d(1),  # Global average pooling
+            nn.Flatten(),  # Convert to [batch_size, features]
             
-            # Then apply the classification layers
+            # Dense layers (same as EfficientNet)
             nn.Linear(in_features, 1024),
             nn.BatchNorm1d(1024),
             nn.GELU(),
@@ -72,9 +73,9 @@ class DeepfakeSwin(nn.Module):
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
-        # Extract features - output shape: [batch_size, channels, height, width]
-        features = self.backbone.forward_features(x)
-        # Apply classifier - handles spatial dimensions and classification
+        # Get features from Swin backbone
+        features = self.backbone.forward_features(x)  # [B, C, H, W]
+        # Apply classifier (handles normalization, pooling, and classification)
         return self.classifier(features)
     
     def get_optimizer(self):
