@@ -282,98 +282,121 @@ def format_prediction(prediction):
 
 def process_video_input(video_file):
     try:
-        # Get number of frames from user
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            num_frames = st.slider("Number of frames to analyze", min_value=10, max_value=300, value=100, step=10,
-                                help="More frames = more accurate but slower processing")
-        with col2:
-            start_button = st.button("Start Processing", type="primary")
-        
-        if not start_button:
+        video_path = None  # Initialize video_path to None
+        # Initialize session state for processing
+        if 'processing_started' not in st.session_state:
+            st.session_state.processing_started = False
+        if 'processing_complete' not in st.session_state:
+            st.session_state.processing_complete = False
+        if 'results' not in st.session_state:
+            st.session_state.results = None
+        if 'faces' not in st.session_state:
+            st.session_state.faces = None
+
+        # Only show the slider and button if processing hasn't started
+        if not st.session_state.processing_started:
+            # Get number of frames from user
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                num_frames = st.slider("Number of frames to analyze", min_value=10, max_value=300, value=30, step=10,
+                                    help="More frames = more accurate but slower processing")
+            with col2:
+                if st.button("Start Processing", type="primary"):
+                    st.session_state.processing_started = True
+                    st.session_state.num_frames = num_frames
+                    st.rerun()
             return
-        
-        # Create progress bars
-        st.write("### Processing Video")
-        progress_load = st.progress(0)
-        status_load = st.empty()
-        progress_extract = st.progress(0)
-        status_extract = st.empty()
-        progress_faces = st.progress(0)
-        status_faces = st.empty()
-        progress_process = st.progress(0)
-        status_process = st.empty()
-        
-        # Initialize video processor
-        video_processor = VideoProcessor(num_frames=num_frames)
-        video_path = video_processor.save_uploaded_video(video_file)
-        
-        # Load models
-        status_load.text("Loading models...")
-        progress_load.progress(0.2)
-        
-        model_dir = Path("runs/models")
-        models_data = []
-        
-        # Load EfficientNet
-        efficientnet_model = get_cached_model(model_dir / "efficientnet/best_model_cpu.pth", "efficientnet")
-        if efficientnet_model is not None:
-            models_data.append({
-                'model': efficientnet_model,
-                'model_type': 'efficientnet',
-                'image_size': MODEL_IMAGE_SIZES['efficientnet']
-            })
-        progress_load.progress(0.6)
-        
-        # Load Swin
-        swin_model = get_cached_model(model_dir / "swin/best_model_cpu.pth", "swin")
-        if swin_model is not None:
-            models_data.append({
-                'model': swin_model,
-                'model_type': 'swin',
-                'image_size': MODEL_IMAGE_SIZES['swin']
-            })
-        
-        progress_load.progress(1.0)
-        status_load.text("Models loaded successfully!")
-        
-        if not models_data:
-            st.error("No models could be loaded! Please check the model files.")
-            return
-        
-        def update_progress(progress_bar, status_placeholder, stage):
-            def callback(progress):
-                progress_bar.progress(progress)
-                status_placeholder.text(f"{stage}: {progress:.1%}")
-            return callback
-        
-        progress_callbacks = {
-            'extract_frames': update_progress(progress_extract, status_extract, "Extracting frames"),
-            'extract_faces': update_progress(progress_faces, status_faces, "Detecting faces"),
-            'process_frames': update_progress(progress_process, status_process, "Processing frames")
-        }
-        
-        results, frame_results, faces = video_processor.process_video(
-            video_path,
-            extract_face_fn=extract_face,
-            process_image_fn=process_image,
-            models=models_data,
-            progress_callbacks=progress_callbacks
-        )
-        
-        # Clear progress bars
-        for progress in [progress_load, progress_extract, progress_faces, progress_process]:
-            progress.empty()
-        for status in [status_load, status_extract, status_faces, status_process]:
-            status.empty()
-        
-        if results:
-            pred_tab, faces_tab = st.tabs(["Predictions", "Detected Faces"])
+
+        # If processing has started but not complete, show the progress bar
+        if st.session_state.processing_started and not st.session_state.processing_complete:
+            # Create a single progress container
+            progress_container = st.container()
+            with progress_container:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
             
-            with pred_tab:
+            # Initialize video processor
+            video_processor = VideoProcessor(num_frames=st.session_state.num_frames)
+            video_path = video_processor.save_uploaded_video(video_file)
+            
+            # Load models
+            status_text.text("🔄 Loading models...")
+            progress_bar.progress(0.2)
+            
+            model_dir = Path("runs/models")
+            models_data = []
+            
+            # Load models (EfficientNet and Swin)
+            efficientnet_model = get_cached_model(model_dir / "efficientnet/best_model_cpu.pth", "efficientnet")
+            if efficientnet_model is not None:
+                models_data.append({
+                    'model': efficientnet_model,
+                    'model_type': 'efficientnet',
+                    'image_size': MODEL_IMAGE_SIZES['efficientnet']
+                })
+            
+            swin_model = get_cached_model(model_dir / "swin/best_model_cpu.pth", "swin")
+            if swin_model is not None:
+                models_data.append({
+                    'model': swin_model,
+                    'model_type': 'swin',
+                    'image_size': MODEL_IMAGE_SIZES['swin']
+                })
+            
+            if not models_data:
+                st.error("No models could be loaded! Please check the model files.")
+                return
+            
+            # Define progress callback
+            total_progress = {'value': 0}  # Use dictionary to maintain state
+            
+            def update_progress(stage):
+                def callback(progress):
+                    # Update total progress based on stage
+                    if stage == 'extract_frames':
+                        total_progress['value'] = progress * 0.5  # First half
+                    elif stage in ['extract_faces', 'process_frames']:
+                        total_progress['value'] = 0.5 + (progress * 0.5)  # Second half
+                    
+                    # Ensure progress only moves forward
+                    progress_bar.progress(total_progress['value'])
+                    status_text.text(f"🎥 Processing video... {int(total_progress['value'] * 100)}%")
+                return callback
+            
+            progress_callbacks = {
+                'extract_frames': update_progress('extract_frames'),
+                'extract_faces': update_progress('extract_faces'),
+                'process_frames': update_progress('process_frames')
+            }
+            
+            # Process video
+            results, frame_results, faces = video_processor.process_video(
+                video_path,
+                extract_face_fn=extract_face,
+                process_image_fn=process_image,
+                models=models_data,
+                progress_callbacks=progress_callbacks
+            )
+            
+            # Store results in session state
+            st.session_state.results = results
+            st.session_state.faces = faces
+            
+            # Clear progress indicators
+            progress_container.empty()
+            st.session_state.processing_complete = True
+            st.rerun()
+
+        # If processing is complete, show the results
+        if st.session_state.processing_complete:
+            results = st.session_state.results
+            faces = st.session_state.faces
+
+            if results:
                 st.write("### Model Predictions")
                 cols = st.columns(2)
                 
+                overall_prediction = "REAL"  # Default to REAL
                 for idx, result in enumerate(results):
                     with cols[idx % 2]:
                         st.markdown(f"""
@@ -384,8 +407,42 @@ def process_video_input(video_file):
                             Fake Frames: {result['fake_frame_ratio']:.1%}</p>
                         </div>
                         """, unsafe_allow_html=True)
-            
-            with faces_tab:
+                        
+                        # Determine overall prediction
+                        if result['prediction'] == "FAKE":
+                            overall_prediction = "FAKE"
+                
+                # Display overall verdict with improved styling
+                st.markdown(f"""
+                <div style='
+                    background-color: {"rgba(255, 68, 68, 0.1)" if overall_prediction == "FAKE" else "rgba(0, 255, 157, 0.1)"};
+                    border: 3px solid {"#ff4444" if overall_prediction == "FAKE" else "#00ff9d"};
+                    border-radius: 15px;
+                    padding: 20px;
+                    margin: 30px 0;
+                    text-align: center;
+                    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                '>
+                    <div style='
+                        font-size: 4em;
+                        margin: 0;
+                        color: {"#ff4444" if overall_prediction == "FAKE" else "#00ff9d"};
+                        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+                        font-weight: bold;
+                    '>
+                        {overall_prediction}
+                    </div>
+                    <p style='
+                        font-size: 1.2em;
+                        margin: 10px 0 0 0;
+                        color: {"#ff4444" if overall_prediction == "FAKE" else "#00ff9d"};
+                    '>
+                        Final Verdict
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Display detected faces right under the results
                 st.write("### Sample Detected Faces")
                 n_sample_faces = min(12, len(faces))
                 sample_indices = np.linspace(0, len(faces)-1, n_sample_faces, dtype=int)
@@ -398,13 +455,13 @@ def process_video_input(video_file):
                         st.markdown('<div class="face-grid-image">', unsafe_allow_html=True)
                         st.image(resized_face, caption=f"Frame {face_idx}", use_container_width=False)
                         st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            st.warning("No faces could be detected in the video frames.")
-        
-        # Cleanup
-        if os.path.exists(video_path):
-            os.remove(video_path)
-        
+            else:
+                st.warning("No faces could be detected in the video frames.")
+            
+            # Cleanup
+            if video_path is not None and os.path.exists(video_path):
+                os.remove(video_path)
+            
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
         logger.error(f"Error processing video: {str(e)}")
@@ -419,78 +476,235 @@ def process_image_input(uploaded_file):
                 st.error("No face detected in the image. Please upload an image containing a clear face.")
                 return
             
-            col1, col2 = st.columns([1, 2])
+            # Model predictions section (moved to the top)
+            st.write("### Model Predictions")
+            
+            # Load models
+            model_dir = Path("runs/models")
+            cols = st.columns(2)  # Two columns for EfficientNet and Swin predictions
+            
+            # Process with EfficientNet
+            with cols[0]:
+                efficientnet_model = get_cached_model(
+                    model_dir / "efficientnet/best_model_cpu.pth", 
+                    "efficientnet"
+                )
+                if efficientnet_model is not None:
+                    processed_image = process_image(face_image, "efficientnet")
+                    if processed_image is not None:
+                        with torch.no_grad():
+                            output = efficientnet_model(processed_image)
+                            probability = torch.sigmoid(output).item()
+                            prediction = "FAKE" if probability > 0.5 else "REAL"
+                            confidence = probability if prediction == "FAKE" else 1 - probability
+                        
+                        st.markdown(f"""
+                        <div style='padding: 15px; border-radius: 10px; border: 1px solid #ddd; margin: 5px 0;'>
+                            <h4>EFFICIENTNET</h4>
+                            <p>Prediction: {format_prediction(prediction)}<br>
+                            Confidence: {format_confidence(confidence)}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.error("Failed to process image for EfficientNet")
+            
+            # Process with Swin
+            with cols[1]:
+                swin_model = get_cached_model(
+                    model_dir / "swin/best_model_cpu.pth", 
+                    "swin"
+                )
+                if swin_model is not None:
+                    processed_image = process_image(face_image, "swin")
+                    if processed_image is not None:
+                        with torch.no_grad():
+                            output = swin_model(processed_image)
+                            probability = torch.sigmoid(output).item()
+                            prediction = "FAKE" if probability > 0.5 else "REAL"
+                            confidence = probability if prediction == "FAKE" else 1 - probability
+                        
+                        st.markdown(f"""
+                        <div style='padding: 15px; border-radius: 10px; border: 1px solid #ddd; margin: 5px 0;'>
+                            <h4>SWIN TRANSFORMER</h4>
+                            <p>Prediction: {format_prediction(prediction)}<br>
+                            Confidence: {format_confidence(confidence)}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.error("Failed to process image for Swin")
+            
+            # Display overall verdict
+            overall_prediction = "REAL"  # Default to REAL
+            if prediction == "FAKE":
+                overall_prediction = "FAKE"
+            
+            st.markdown(f"""
+            <div style='
+                background-color: {"rgba(255, 68, 68, 0.1)" if overall_prediction == "FAKE" else "rgba(0, 255, 157, 0.1)"};
+                border: 3px solid {"#ff4444" if overall_prediction == "FAKE" else "#00ff9d"};
+                border-radius: 15px;
+                padding: 20px;
+                margin: 30px 0;
+                text-align: center;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            '>
+                <div style='
+                    font-size: 4em;
+                    margin: 0;
+                    color: {"#ff4444" if overall_prediction == "FAKE" else "#00ff9d"};
+                    text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+                    font-weight: bold;
+                '>
+                    {overall_prediction}
+                </div>
+                <p style='
+                    font-size: 1.2em;
+                    margin: 10px 0 0 0;
+                    color: {"#ff4444" if overall_prediction == "FAKE" else "#00ff9d"};
+                '>
+                    Final Verdict
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Image section (moved below predictions)
+            st.write("")  # Add some spacing
+            
+            # Use columns to align the images side by side with a gap
+            col1, col2 = st.columns([1, 1])  # Equal width for both columns
             
             with col1:
-                st.write("### Original Image with Face Detection")
-                st.image(viz_image, use_container_width=False)
-                
-                st.write("### Extracted Face")
-                display_face = resize_image_for_display(face_image)
-                st.image(display_face, use_container_width=False)
-                st.write(f"Face size: {face_image.size[0]}x{face_image.size[1]}")
+                # Resize the original image for display
+                resized_viz_image = resize_image_for_display(viz_image, max_size=500)  # Adjust max_size as needed
+                st.image(resized_viz_image, caption="Original Image with Face Detection")  # Caption under the image
             
             with col2:
-                st.write("### Model Predictions")
-                
-                # Load models
-                model_dir = Path("runs/models")
-                cols = st.columns(2)
-                
-                # Process with EfficientNet
-                with cols[0]:
-                    efficientnet_model = get_cached_model(
-                        model_dir / "efficientnet/best_model_cpu.pth", 
-                        "efficientnet"
-                    )
-                    if efficientnet_model is not None:
-                        processed_image = process_image(face_image, "efficientnet")
-                        if processed_image is not None:
-                            with torch.no_grad():
-                                output = efficientnet_model(processed_image)
-                                probability = torch.sigmoid(output).item()
-                                prediction = "FAKE" if probability > 0.5 else "REAL"
-                                confidence = probability if prediction == "FAKE" else 1 - probability
-                            
-                            st.markdown(f"""
-                            <div style='padding: 15px; border-radius: 10px; border: 1px solid #ddd; margin: 5px 0;'>
-                                <h4>EFFICIENTNET</h4>
-                                <p>Prediction: {format_prediction(prediction)}<br>
-                                Confidence: {format_confidence(confidence)}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            st.error("Failed to process image for EfficientNet")
-                
-                # Process with Swin
-                with cols[1]:
-                    swin_model = get_cached_model(
-                        model_dir / "swin/best_model_cpu.pth", 
-                        "swin"
-                    )
-                    if swin_model is not None:
-                        processed_image = process_image(face_image, "swin")
-                        if processed_image is not None:
-                            with torch.no_grad():
-                                output = swin_model(processed_image)
-                                probability = torch.sigmoid(output).item()
-                                prediction = "FAKE" if probability > 0.5 else "REAL"
-                                confidence = probability if prediction == "FAKE" else 1 - probability
-                            
-                            st.markdown(f"""
-                            <div style='padding: 15px; border-radius: 10px; border: 1px solid #ddd; margin: 5px 0;'>
-                                <h4>SWIN TRANSFORMER</h4>
-                                <p>Prediction: {format_prediction(prediction)}<br>
-                                Confidence: {format_confidence(confidence)}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            st.error("Failed to process image for Swin")
+                # Resize the extracted face for display
+                display_face = resize_image_for_display(face_image, max_size=500)  # Adjust max_size as needed
+                st.image(display_face, caption="Extracted Face")  # Caption under the image
     
     except Exception as e:
         st.error(f"An error occurred: {str(e)}")
         logger.error(f"Error in process_image_input: {str(e)}")
         clear_session_data()
+        
+def show_home_page():
+    """Display the landing/home page"""
+    # Custom CSS for the header and input section
+    st.markdown("""
+        <style>
+            /* Header styling */
+            .header-container {
+                text-align: center;
+                padding: 2rem 0;
+                margin-bottom: 2rem;
+            }
+            .main-title {
+                color: #ffffff;
+                font-size: 2.5rem;
+                font-weight: 600;
+                margin-bottom: 0.5rem;
+            }
+            .subtitle {
+                color: #a0a0a0;
+                font-size: 1.1rem;
+                font-weight: 300;
+                margin-bottom: 2rem;
+            }
+            
+            /* Input section styling */
+            .input-container {
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 2rem;
+            }
+            
+            /* Radio button styling */
+            div[data-testid="stHorizontalBlock"] {
+                background: rgba(255, 255, 255, 0.05);
+                border-radius: 15px;
+                padding: 1rem;
+                display: flex;
+                justify-content: center;
+                gap: 2rem;
+                margin-bottom: 1rem;
+            }
+            
+            div.row-widget.stRadio > div {
+                flex-direction: row;
+                justify-content: center;
+                gap: 2rem;
+            }
+            
+            div.row-widget.stRadio > div[role="radiogroup"] > label {
+                background: rgba(255, 255, 255, 0.1);
+                padding: 0.5rem 2rem;
+                border-radius: 10px;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            }
+            
+            div.row-widget.stRadio > div[role="radiogroup"] > label:hover {
+                background: rgba(255, 255, 255, 0.2);
+            }
+            
+            /* File uploader styling */
+            .uploadFile {
+                margin-top: 1rem;
+                border: 2px dashed rgba(255, 255, 255, 0.2);
+                border-radius: 10px;
+                padding: 2rem;
+                text-align: center;
+                background: rgba(255, 255, 255, 0.05);
+            }
+            
+            .upload-text {
+                color: #a0a0a0;
+                font-size: 0.9rem;
+                margin-top: 0.5rem;
+                text-align: center;
+            }
+        </style>
+        
+        <div class="header-container">
+            <h1 class="main-title">Deepfake🔍Detection</h1>
+            <p class="subtitle">Analyze images and videos for potential deepfake manipulation</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Input container
+    with st.container():
+        # Input type selection
+        input_type = st.radio(
+            "Select media type to analyze:",
+            ["Image", "Video"],
+            horizontal=True,
+            label_visibility="visible"
+        )
+        
+        # File uploader
+        if input_type == "Image":
+            uploaded_file = st.file_uploader(
+                "Upload Image",
+                type=["jpg", "jpeg", "png"],
+                label_visibility="collapsed"
+            )
+            st.markdown(
+                '<p class="upload-text">Supported formats: JPG, JPEG, PNG</p>',
+                unsafe_allow_html=True
+            )
+        else:
+            uploaded_file = st.file_uploader(
+                "Upload Video",
+                type=["mp4", "avi", "mov"],
+                label_visibility="collapsed"
+            )
+            st.markdown(
+                '<p class="upload-text">Supported formats: MP4, AVI, MOV • Max size: 200MB</p>',
+                unsafe_allow_html=True
+            )
+        
+        return input_type, uploaded_file
 
 def main():
     init_session_state()
@@ -499,23 +713,39 @@ def main():
         st.warning("Your session has timed out. Please reload the page.")
         return
 
-    st.title("🔍 Deepfake Detection System")
-    st.write("Upload an image or video to check if it's real or fake using multiple deep learning models.")
+    # Initialize or get the current page state
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = 'home'
     
-    input_type = st.radio("Select input type:", ["Image", "Video"], horizontal=True)
+    # Show back button if we're on results page
+    if st.session_state.current_page == 'results':
+        if st.button('← Back to Home'):
+            # Reset session state variables related to video processing
+            st.session_state.results = None
+            st.session_state.faces = None
+            st.session_state.processing_started = False
+            st.session_state.processing_complete = False
+            st.session_state.num_frames = None
+            st.session_state.current_page = 'home'
+            st.rerun()
     
-    if input_type == "Image":
-        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+    # Display appropriate page
+    if st.session_state.current_page == 'home':
+        input_type, uploaded_file = show_home_page()
         
         if uploaded_file is not None:
-            with cleanup_on_exit():
-                process_image_input(uploaded_file)
-    else:
-        uploaded_file = st.file_uploader("Choose a video...", type=["mp4", "avi", "mov"])
-        
-        if uploaded_file is not None:
-            with cleanup_on_exit():
-                process_video_input(uploaded_file)
+            # Store the input type and file in session state
+            st.session_state.input_type = input_type
+            st.session_state.uploaded_file = uploaded_file
+            st.session_state.current_page = 'results'
+            st.rerun()
+            
+    elif st.session_state.current_page == 'results':
+        with cleanup_on_exit():
+            if st.session_state.input_type == "Image":
+                process_image_input(st.session_state.uploaded_file)
+            else:
+                process_video_input(st.session_state.uploaded_file)
 
 if __name__ == "__main__":
     main()
