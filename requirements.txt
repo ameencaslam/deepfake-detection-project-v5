@@ -2,6 +2,8 @@ streamlit
 torch
 torchvision
 numpy
+Pillow
+opencv-python-headless
 mediapipe
 scikit-learn
 matplotlib
@@ -11,5 +13,5 @@ pandas
 timm
 efficientnet-pytorch
 mlflow
-opencv-python
 kaggle
+python-multipart
