@@ -517,6 +517,10 @@ def process_image_input(uploaded_file):
                         """, unsafe_allow_html=True)
                     else:
                         st.error("Failed to process image for EfficientNet")
+
+            overall_prediction = "REAL"  # Default to REAL
+            if prediction == "FAKE":
+                overall_prediction = "FAKE"
             
             # Process with Swin
             with cols[1]:
@@ -544,7 +548,6 @@ def process_image_input(uploaded_file):
                         st.error("Failed to process image for Swin")
             
             # Display overall verdict
-            overall_prediction = "REAL"  # Default to REAL
             if prediction == "FAKE":
                 overall_prediction = "FAKE"
             
