@@ -12,3 +12,4 @@ timm
 efficientnet-pytorch
 mlflow
 opencv-python
+kaggle
