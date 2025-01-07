@@ -23,6 +23,16 @@ from pathlib import Path
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
+# Run setup script if models don't exist
+# For streamlit web deployement, remove if using in localhost or uncomment the line below
+#os.makedirs("runs", exist_ok=True)
+if not os.path.exists("runs"):
+    try:
+        subprocess.run(['bash', 'setup.sh'], check=True)
+    except subprocess.CalledProcessError as e:
+        st.error(f"Error running setup script: {str(e)}")
+        st.stop()
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
