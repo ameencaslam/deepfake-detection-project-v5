@@ -18,12 +18,14 @@ import time
 from contextlib import contextmanager
 import torchvision.transforms as T
 from pathlib import Path
+import socket
 
 # Configure memory management
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
 # Run setup script if models don't exist
+# You can download the model from kaggle 
 # For streamlit web deployement, remove if using in localhost or uncomment the line below
 #os.makedirs("runs", exist_ok=True)
 if not os.path.exists("runs"):
@@ -688,12 +690,22 @@ def show_home_page():
     # Input container
     with st.container():
         # Input type selection
+        input_options = ["Image", "Video", "Live Camera"]
         input_type = st.radio(
             "Select media type to analyze:",
-            ["Image", "Video", "Live Camera"],
+            input_options,
             horizontal=True,
             label_visibility="visible"
         )
+        
+        # Show a message if "Live Camera" is selected but not running locally
+        if input_type == "Live Camera" and not is_running_locally():
+            st.info(
+                "⚠️ The **Live Camera** feature is only available when running this app locally. "
+                "To use this feature, please clone the GitHub repository and run the app on your machine. "
+                "[GitHub Repository Link](https://github.com/ameencaslam/deepfake-detection-project-v5)"
+            )
+            return "Live Camera", None
         
         # File uploader for image and video
         if input_type in ["Image", "Video"]:
@@ -720,6 +732,34 @@ def show_home_page():
             return input_type, uploaded_file
         else:  # Live Camera
             return "Live Camera", None
+        
+def is_running_locally():
+    """
+    Detects whether the Streamlit app is running locally (on localhost or 127.0.0.1)
+    or via a network interface.
+    
+    Returns:
+        bool: True if running locally, False otherwise.
+    """
+    try:
+        # Get the hostname and resolve to an IP
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        
+        # Streamlit binds to localhost by default
+        # Check for localhost or 127.x.x.x
+        if "localhost" in hostname or local_ip.startswith("127."):
+            return True
+        
+        # If the app is running with a private IP (e.g., 192.168.x.x), it's likely still local
+        if local_ip.startswith("192.168.") or local_ip.startswith("10."):
+            return True
+        
+        # Otherwise, assume it's deployed
+        return False
+    except Exception as e:
+        # In case of failure, assume not local
+        return False
 
 def show_live_camera_page():
     """Display the live camera page"""
@@ -785,15 +825,21 @@ def show_live_camera_page():
                         prediction = "FAKE" if probability > 0.5 else "REAL"
                         confidence = probability if prediction == "FAKE" else 1 - probability
 
+                    # Set color based on prediction
+                    if prediction == "FAKE":
+                        text_color = (0, 0, 255)  # Red for FAKE
+                    else:
+                        text_color = (0, 255, 0)  # Green for REAL
+
                 # Draw the face detection square on the frame
                 if viz_image is not None:
                     # Convert viz_image (with face detection square) back to OpenCV format
                     frame_with_square = cv2.cvtColor(np.array(viz_image), cv2.COLOR_RGB2BGR)
                     # Overlay the predictions on the frame with the face detection square
                     cv2.putText(frame_with_square, f"Prediction: {prediction}", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(frame_with_square, f"Confidence: {confidence:.2f}", (10, 70),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
+                    cv2.putText(frame_with_square, f"Confidence: {confidence*100:.0f}%", (10, 70),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
                     # Use the frame with both the square and predictions
                     frame = frame_with_square
 
@@ -831,8 +877,12 @@ def main():
             st.session_state.current_page = 'results'
             st.rerun()
         elif input_type == "Live Camera":
-            st.session_state.current_page = 'live_camera'
-            st.rerun()
+            if is_running_locally():
+                st.session_state.current_page = 'live_camera'
+                st.rerun()
+            else:
+                # The message is already shown in show_home_page, so no need to handle it here
+                pass
     elif st.session_state.current_page == 'results':
         with cleanup_on_exit():
             if st.session_state.input_type == "Image":
@@ -840,7 +890,10 @@ def main():
             else:
                 process_video_input(st.session_state.uploaded_file)
     elif st.session_state.current_page == 'live_camera':
-        show_live_camera_page()
+        if is_running_locally():
+            show_live_camera_page()
+        else:
+            st.error("Live Camera option is only available when running locally.")
 
 if __name__ == "__main__":
     main()
