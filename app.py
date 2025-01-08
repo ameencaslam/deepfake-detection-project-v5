@@ -735,31 +735,20 @@ def show_home_page():
         
 def is_running_locally():
     """
-    Detects whether the Streamlit app is running locally (on localhost or 127.0.0.1)
-    or via a network interface.
-    
-    Returns:
-        bool: True if running locally, False otherwise.
+    Checks if the Streamlit app is running locally based on the HOSTNAME environment variable.
     """
-    try:
-        # Get the hostname and resolve to an IP
-        hostname = socket.gethostname()
-        local_ip = socket.gethostbyname(hostname)
-        
-        # Streamlit binds to localhost by default
-        # Check for localhost or 127.x.x.x
-        if "localhost" in hostname or local_ip.startswith("127."):
-            return True
-        
-        # If the app is running with a private IP (e.g., 192.168.x.x), it's likely still local
-        if local_ip.startswith("192.168.") or local_ip.startswith("10."):
-            return True
-        
-        # Otherwise, assume it's deployed
+    hostname = os.getenv("HOSTNAME")
+    
+    # If HOSTNAME is not set, assume it's running locally
+    if hostname is None:
+        return True
+    
+    # If HOSTNAME is set to 'streamlit', it's running in the deployed environment
+    if hostname == "streamlit":
         return False
-    except Exception as e:
-        # In case of failure, assume not local
-        return False
+    
+    # Otherwise, assume it's running locally
+    return True
 
 def show_live_camera_page():
     """Display the live camera page"""
