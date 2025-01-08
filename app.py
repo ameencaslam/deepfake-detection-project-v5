@@ -690,38 +690,124 @@ def show_home_page():
         # Input type selection
         input_type = st.radio(
             "Select media type to analyze:",
-            ["Image", "Video"],
+            ["Image", "Video", "Live Camera"],
             horizontal=True,
             label_visibility="visible"
         )
         
-        # File uploader
-        if input_type == "Image":
-            uploaded_file = st.file_uploader(
-                "Upload Image",
-                type=["jpg", "jpeg", "png"],
-                label_visibility="collapsed"
-            )
-            st.markdown(
-                '<p class="upload-text">Supported formats: JPG, JPEG, PNG</p>',
-                unsafe_allow_html=True
-            )
-        else:
-            uploaded_file = st.file_uploader(
-                "Upload Video",
-                type=["mp4", "avi", "mov"],
-                label_visibility="collapsed"
-            )
-            st.markdown(
-                '<p class="upload-text">Supported formats: MP4, AVI, MOV • Max size: 200MB</p>',
-                unsafe_allow_html=True
-            )
-        
-        return input_type, uploaded_file
+        # File uploader for image and video
+        if input_type in ["Image", "Video"]:
+            if input_type == "Image":
+                uploaded_file = st.file_uploader(
+                    "Upload Image",
+                    type=["jpg", "jpeg", "png"],
+                    label_visibility="collapsed"
+                )
+                st.markdown(
+                    '<p class="upload-text">Supported formats: JPG, JPEG, PNG</p>',
+                    unsafe_allow_html=True
+                )
+            else:
+                uploaded_file = st.file_uploader(
+                    "Upload Video",
+                    type=["mp4", "avi", "mov"],
+                    label_visibility="collapsed"
+                )
+                st.markdown(
+                    '<p class="upload-text">Supported formats: MP4, AVI, MOV • Max size: 200MB</p>',
+                    unsafe_allow_html=True
+                )
+            return input_type, uploaded_file
+        else:  # Live Camera
+            return "Live Camera", None
+
+def show_live_camera_page():
+    """Display the live camera page"""
+    st.write("## Live Camera Deepfake Detection")
+
+    # Initialize session state for camera control
+    if 'camera_active' not in st.session_state:
+        st.session_state.camera_active = False
+
+    # Model selection
+    model_type = st.radio(
+        "Select model for live detection:",
+        ["EfficientNet", "Swin Transformer"],
+        horizontal=True
+    )
+
+    # Start/Stop button with dynamic text
+    if st.button("Stop Camera" if st.session_state.camera_active else "Start Camera"):
+        st.session_state.camera_active = not st.session_state.camera_active
+        st.rerun()  # Force a rerun to update the UI immediately
+
+    # Status message below the button
+    if st.session_state.camera_active:
+        st.write("Camera is running. Press 'Stop Camera' to end the feed.")
+    else:
+        st.write("Camera is stopped. Press 'Start Camera' to begin.")
+
+    # Placeholder for the video feed
+    video_placeholder = st.empty()
+
+    # Load the selected model
+    model_dir = Path("runs/models")
+    if model_type == "EfficientNet":
+        model = get_cached_model(model_dir / "efficientnet/best_model_cpu.pth", "efficientnet")
+    else:
+        model = get_cached_model(model_dir / "swin/best_model_cpu.pth", "swin")
+
+    if model is None:
+        st.error("Failed to load the selected model.")
+        return
+
+    # Start camera feed
+    if st.session_state.camera_active:
+        cap = cv2.VideoCapture(0)  # Open webcam
+        while st.session_state.camera_active:
+            ret, frame = cap.read()
+            if not ret:
+                st.error("Failed to capture frame from camera.")
+                break
+
+            # Convert frame to RGB (MediaPipe requires RGB)
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # Detect faces and draw bounding boxes
+            face_image, viz_image = extract_face(Image.fromarray(frame_rgb))
+            if face_image is not None:
+                # Process face with the selected model
+                processed_image = process_image(face_image, model_type.lower())
+                if processed_image is not None:
+                    with torch.no_grad():
+                        output = model(processed_image)
+                        probability = torch.sigmoid(output).item()
+                        prediction = "FAKE" if probability > 0.5 else "REAL"
+                        confidence = probability if prediction == "FAKE" else 1 - probability
+
+                # Draw the face detection square on the frame
+                if viz_image is not None:
+                    # Convert viz_image (with face detection square) back to OpenCV format
+                    frame_with_square = cv2.cvtColor(np.array(viz_image), cv2.COLOR_RGB2BGR)
+                    # Overlay the predictions on the frame with the face detection square
+                    cv2.putText(frame_with_square, f"Prediction: {prediction}", (10, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    cv2.putText(frame_with_square, f"Confidence: {confidence:.2f}", (10, 70),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    # Use the frame with both the square and predictions
+                    frame = frame_with_square
+
+            # Display the frame with a specific width
+            video_placeholder.image(frame, channels="BGR", width=800)  # Set width to 800 pixels
+
+        # Release the camera when stopped
+        cap.release()
+        st.session_state.camera_active = False  # Ensure state is reset
+        st.rerun()  # Force a rerun to update the UI
 
 def main():
     init_session_state()
-    
+
     if check_session_timeout():
         st.warning("Your session has timed out. Please reload the page.")
         return
@@ -729,36 +815,32 @@ def main():
     # Initialize or get the current page state
     if 'current_page' not in st.session_state:
         st.session_state.current_page = 'home'
-    
-    # Show back button if we're on results page
-    if st.session_state.current_page == 'results':
+
+    # Show back button if not on the home page
+    if st.session_state.current_page != 'home':
         if st.button('← Back to Home'):
-            # Reset session state variables related to video processing
-            st.session_state.results = None
-            st.session_state.faces = None
-            st.session_state.processing_started = False
-            st.session_state.processing_complete = False
-            st.session_state.num_frames = None
             st.session_state.current_page = 'home'
             st.rerun()
-    
+
     # Display appropriate page
     if st.session_state.current_page == 'home':
         input_type, uploaded_file = show_home_page()
-        
         if uploaded_file is not None:
-            # Store the input type and file in session state
             st.session_state.input_type = input_type
             st.session_state.uploaded_file = uploaded_file
             st.session_state.current_page = 'results'
             st.rerun()
-            
+        elif input_type == "Live Camera":
+            st.session_state.current_page = 'live_camera'
+            st.rerun()
     elif st.session_state.current_page == 'results':
         with cleanup_on_exit():
             if st.session_state.input_type == "Image":
                 process_image_input(st.session_state.uploaded_file)
             else:
                 process_video_input(st.session_state.uploaded_file)
+    elif st.session_state.current_page == 'live_camera':
+        show_live_camera_page()
 
 if __name__ == "__main__":
     main()
