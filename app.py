@@ -24,6 +24,7 @@ torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
 # Run setup script if models don't exist
+# You can download the model from kaggle 
 # For streamlit web deployement, remove if using in localhost or uncomment the line below
 #os.makedirs("runs", exist_ok=True)
 if not os.path.exists("runs"):
@@ -721,9 +722,23 @@ def show_home_page():
         else:  # Live Camera
             return "Live Camera", None
 
+def is_running_locally():
+    """Check if the app is running on localhost."""
+    # Streamlit Cloud sets the environment variable 'STREAMLIT_SERVER_PORT'
+    return 'STREAMLIT_SERVER_PORT' not in os.environ
+
 def show_live_camera_page():
     """Display the live camera page"""
     st.write("## Live Camera Deepfake Detection")
+
+    # Check if running locally
+    if not is_running_locally():
+        st.warning("""
+            **Live camera feature is only available when running the app locally.**  
+            To use this feature, please clone the repository and run the app on your local machine.  
+            [GitHub Repository Link](#)
+        """)
+        return
 
     # Initialize session state for camera control
     if 'camera_active' not in st.session_state:
@@ -763,7 +778,13 @@ def show_live_camera_page():
 
     # Start camera feed
     if st.session_state.camera_active:
-        cap = cv2.VideoCapture(0)  # Open webcam
+        # Try to open the webcam
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            st.error("Unable to access the camera. Please ensure a webcam is connected.")
+            st.session_state.camera_active = False
+            st.rerun()
+
         while st.session_state.camera_active:
             ret, frame = cap.read()
             if not ret:
@@ -785,15 +806,21 @@ def show_live_camera_page():
                         prediction = "FAKE" if probability > 0.5 else "REAL"
                         confidence = probability if prediction == "FAKE" else 1 - probability
 
+                    # Set color based on prediction
+                    if prediction == "FAKE":
+                        text_color = (0, 0, 255)  # Red for FAKE
+                    else:
+                        text_color = (0, 255, 0)  # Green for REAL
+
                 # Draw the face detection square on the frame
                 if viz_image is not None:
                     # Convert viz_image (with face detection square) back to OpenCV format
                     frame_with_square = cv2.cvtColor(np.array(viz_image), cv2.COLOR_RGB2BGR)
                     # Overlay the predictions on the frame with the face detection square
                     cv2.putText(frame_with_square, f"Prediction: {prediction}", (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(frame_with_square, f"Confidence: {confidence:.2f}", (10, 70),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
+                    cv2.putText(frame_with_square, f"Confidence: {confidence*100:.0f}%", (10, 70),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
                     # Use the frame with both the square and predictions
                     frame = frame_with_square
 
