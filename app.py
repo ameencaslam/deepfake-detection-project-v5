@@ -840,6 +840,12 @@ def show_live_camera_page():
         st.session_state.camera_active = False  # Ensure state is reset
         st.rerun()  # Force a rerun to update the UI
 
+def clear_session_state():
+    keys_to_clear = ['processing_started', 'processing_complete', 'results', 'faces', 'num_frames']
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+
 def main():
     init_session_state()
 
@@ -854,6 +860,7 @@ def main():
     # Show back button if not on the home page
     if st.session_state.current_page != 'home':
         if st.button('← Back to Home'):
+            clear_session_state()
             st.session_state.current_page = 'home'
             st.rerun()
 
