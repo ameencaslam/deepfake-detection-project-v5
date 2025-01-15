@@ -4,7 +4,7 @@ import logging
 import numpy as np
 from utils_video_processor import VideoProcessor
 from pathlib import Path
-from utils_image import extract_face, process_image, resize_image_for_display
+from utils_image_processor import extract_face, process_image, resize_image_for_display
 from utils_model import get_cached_model
 from utils_format import format_confidence, format_prediction
 

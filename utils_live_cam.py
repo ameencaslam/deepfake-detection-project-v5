@@ -5,7 +5,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 from utils_model import get_cached_model
-from utils_image import extract_face, process_image
+from utils_image_processor import extract_face, process_image
 
 def show_live_camera_page():
     """Display the live camera page"""
