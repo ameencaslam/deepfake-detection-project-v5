@@ -2,14 +2,13 @@ import torch
 import torch.nn as nn
 import mlflow
 import mlflow.pytorch
-import timm
+from efficientnet_pytorch import EfficientNet
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix, roc_curve, auc
 import numpy as np
 from data_handler import get_dataloaders
 import logging
-import os
 from tqdm import tqdm
 from pathlib import Path
 
@@ -17,43 +16,39 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class DeepfakeSwin(nn.Module):
+class DeepfakeEfficientNet(nn.Module):
     def __init__(self):
         super().__init__()
-        # Load pretrained Swin Transformer
-        self.backbone = timm.create_model(
-            'swin_base_patch4_window7_224',
-            pretrained=True,
-            num_classes=0,  # Remove classification head
-            global_pool=''  # Disable global pooling
-        )
+        # Load pretrained model
+        self.backbone = EfficientNet.from_pretrained('efficientnet-b3', num_classes=0)
         
-        # Get number of features from Swin-Base
-        in_features = 1024
+        # Get the number of features from the backbone
+        in_features = 1536  # B3 features
         
         # Create classifier head
         self.classifier = nn.Sequential(
-            # Spatial dimension handling
-            nn.LayerNorm([in_features, 7, 7]),  # Normalize features
-            nn.AdaptiveAvgPool2d(1),  # Global average pooling
-            nn.Flatten(),  # Convert to [batch_size, features]
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
             
-            # Dense layers (same as EfficientNet)
+            # First block: in_features -> 1024
             nn.Linear(in_features, 1024),
             nn.BatchNorm1d(1024),
             nn.GELU(),
             nn.Dropout(p=0.5),
             
+            # Second block: 1024 -> 512
             nn.Linear(1024, 512),
             nn.BatchNorm1d(512),
             nn.GELU(),
             nn.Dropout(p=0.4),
             
+            # Third block: 512 -> 256
             nn.Linear(512, 256),
             nn.BatchNorm1d(256),
             nn.GELU(),
             nn.Dropout(p=0.3),
             
+            # Output layer: 256 -> 1
             nn.Linear(256, 1)
         )
         
@@ -71,11 +66,9 @@ class DeepfakeSwin(nn.Module):
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, x):
-        # Get features from Swin backbone
-        features = self.backbone.forward_features(x)  # [B, H, W, C]
-        # Permute dimensions to [B, C, H, W]
-        features = features.permute(0, 3, 1, 2)
-        # Apply classifier (handles normalization, pooling, and classification)
+        # Extract features
+        features = self.backbone.extract_features(x)
+        # Apply classifier
         return self.classifier(features)
     
     def get_optimizer(self):
@@ -107,22 +100,7 @@ class DeepfakeTrainer:
         self.test_loader = test_loader
         self.device = device
         self.criterion = nn.BCEWithLogitsLoss()
-        
-        # Different learning rates for backbone and classifier
-        backbone_params = []
-        classifier_params = []
-        
-        for name, param in model.named_parameters():
-            if 'backbone' in name:
-                backbone_params.append(param)
-            else:
-                classifier_params.append(param)
-        
-        self.optimizer = torch.optim.AdamW([
-            {'params': backbone_params, 'lr': 1e-5},
-            {'params': classifier_params, 'lr': 1e-4}
-        ], weight_decay=0.01)
-        
+        self.optimizer = model.get_optimizer()
         self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer, mode='min', patience=3, factor=0.1
         )
@@ -132,20 +110,6 @@ class DeepfakeTrainer:
         self.train_accuracies = []
         self.val_losses = []
         self.val_accuracies = []
-    
-    def _init_weights(self):
-        for m in self.backbone.head.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.trunc_normal_(m.weight, std=0.02)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.bias, 0)
-                nn.init.constant_(m.weight, 1.0)
-    
-    def forward(self, x):
-        features = self.backbone(x)
-        return self.backbone.head(features)
     
     def train_epoch(self, epoch):
         self.model.train()
@@ -263,7 +227,7 @@ class DeepfakeTrainer:
         best_val_loss = float('inf')
         
         # Create model directory
-        model_dir = Path("models/swin")
+        model_dir = Path("models/efficientnet")
         model_dir.mkdir(parents=True, exist_ok=True)
         
         for epoch in range(num_epochs):
@@ -292,7 +256,7 @@ class DeepfakeTrainer:
                 mlflow.pytorch.log_model(self.model, "best_model")
                 
                 # Save CPU-compatible version with timestamp and metrics
-                model_path = model_dir / f"swin_best_val{val_acc:.4f}_epoch{epoch}.pth"
+                model_path = model_dir / f"efficientnet_best_val{val_acc:.4f}_epoch{epoch}.pth"
                 torch.save(
                     self.model.state_dict(), 
                     str(model_path), 
@@ -325,12 +289,12 @@ def main():
     
     # MLflow setup
     mlflow.set_tracking_uri('file:./mlruns')
-    mlflow.set_experiment('deepfake_swin')
+    mlflow.set_experiment('deepfake_efficientnet')
     
     # Configuration
-    DATA_DIR = '/kaggle/input/2body-images-10k-split'
-    IMAGE_SIZE = 224
-    BATCH_SIZE = 32
+    DATA_DIR = '/kaggle/input/2body-images-10k-split'  # Adjust as needed
+    IMAGE_SIZE = 300  # EfficientNet-B3 optimal size
+    BATCH_SIZE = 32  # Reduced batch size for larger model
     NUM_EPOCHS = 20
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
@@ -342,18 +306,18 @@ def main():
     with mlflow.start_run():
         # Log parameters
         mlflow.log_params({
-            'model_type': 'swin_transformer',
+            'model_type': 'efficientnet-b3',
             'image_size': IMAGE_SIZE,
             'batch_size': BATCH_SIZE,
             'num_epochs': NUM_EPOCHS,
             'optimizer': 'AdamW',
             'backbone_lr': 1e-5,
-            'classifier_lr': 1e-4,
+            'classifier_lr': 5e-5,
             'weight_decay': 0.01
         })
         
         # Create and train model
-        model = DeepfakeSwin()
+        model = DeepfakeEfficientNet()
         trainer = DeepfakeTrainer(model, train_loader, val_loader, test_loader, DEVICE)
         
         # Train
