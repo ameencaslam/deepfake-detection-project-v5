@@ -4,6 +4,8 @@ import os
 import logging
 import warnings
 import subprocess
+import json
+from pathlib import Path
 from utils_video_input import process_video_input
 from utils_live_cam import show_live_camera_page
 from utils_session import *
@@ -13,11 +15,38 @@ from utils_image_input import process_image_input
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
+def ensure_kaggle_credentials():
+    """Ensure Kaggle credentials exist for Kaggle CLI.
+    Tries env vars first; if missing, writes ~/.kaggle/kaggle.json from st.secrets when available.
+    """
+    has_env = bool(os.getenv("KAGGLE_USERNAME")) and bool(os.getenv("KAGGLE_KEY"))
+    kaggle_dir = Path.home() / ".kaggle"
+    kaggle_json = kaggle_dir / "kaggle.json"
+
+    if has_env:
+        return
+
+    # Try to create kaggle.json from Streamlit secrets
+    try:
+        username = st.secrets.get("KAGGLE_USERNAME") if hasattr(st, "secrets") else None
+        key = st.secrets.get("KAGGLE_KEY") if hasattr(st, "secrets") else None
+    except Exception:
+        username, key = None, None
+
+    if username and key:
+        try:
+            kaggle_dir.mkdir(parents=True, exist_ok=True)
+            with kaggle_json.open('w') as f:
+                json.dump({"username": str(username), "key": str(key)}, f)
+        except Exception as e:
+            st.warning(f"Could not write Kaggle credentials file: {e}")
+
 # Run setup script if models don't exist
 # You can download the model from kaggle 
 # For streamlit web deployement, remove if using in localhost or uncomment the line below
 #os.makedirs("runs", exist_ok=True)
 if not os.path.exists("runs"):
+    ensure_kaggle_credentials()
     try:
         subprocess.run(['bash', 'setup.sh'], check=True)
     except subprocess.CalledProcessError as e:
