@@ -24,7 +24,7 @@ def ensure_kaggle_credentials():
     kaggle_json = kaggle_dir / "kaggle.json"
 
     if has_env:
-        return
+        return True
 
     # Try to create kaggle.json from Streamlit secrets
     try:

@@ -28,6 +28,9 @@ def process_image_input(uploaded_file):
             model_dir = Path("runs/models")
             cols = st.columns(2)  # Two columns for EfficientNet and Swin predictions
             
+            efficientnet_pred = None
+            swin_pred = None
+
             # Process with EfficientNet
             with cols[0]:
                 efficientnet_model = get_cached_model(
@@ -40,21 +43,23 @@ def process_image_input(uploaded_file):
                         with torch.no_grad():
                             output = efficientnet_model(processed_image)
                             probability = torch.sigmoid(output).item()
-                            prediction = "FAKE" if probability > 0.5 else "REAL"
-                            confidence = probability if prediction == "FAKE" else 1 - probability
+                            efficientnet_pred = "FAKE" if probability > 0.5 else "REAL"
+                            confidence = probability if efficientnet_pred == "FAKE" else 1 - probability
                         
                         st.markdown(f"""
                         <div style='padding: 15px; border-radius: 10px; border: 1px solid #ddd; margin: 5px 0;'>
                             <h4>EFFICIENTNET</h4>
-                            <p>Prediction: {format_prediction(prediction)}<br>
+                            <p>Prediction: {format_prediction(efficientnet_pred)}<br>
                             Confidence: {format_confidence(confidence)}</p>
                         </div>
                         """, unsafe_allow_html=True)
                     else:
                         st.error("Failed to process image for EfficientNet")
+                else:
+                    st.warning("EfficientNet model not found. Ensure runs/models/efficientnet/best_model_cpu.pth exists.")
 
             overall_prediction = "REAL"  # Default to REAL
-            if prediction == "FAKE":
+            if efficientnet_pred == "FAKE":
                 overall_prediction = "FAKE"
             
             # Process with Swin
@@ -69,23 +74,29 @@ def process_image_input(uploaded_file):
                         with torch.no_grad():
                             output = swin_model(processed_image)
                             probability = torch.sigmoid(output).item()
-                            prediction = "FAKE" if probability > 0.5 else "REAL"
-                            confidence = probability if prediction == "FAKE" else 1 - probability
+                            swin_pred = "FAKE" if probability > 0.5 else "REAL"
+                            confidence = probability if swin_pred == "FAKE" else 1 - probability
                         
                         st.markdown(f"""
                         <div style='padding: 15px; border-radius: 10px; border: 1px solid #ddd; margin: 5px 0;'>
                             <h4>SWIN TRANSFORMER</h4>
-                            <p>Prediction: {format_prediction(prediction)}<br>
+                            <p>Prediction: {format_prediction(swin_pred)}<br>
                             Confidence: {format_confidence(confidence)}</p>
                         </div>
                         """, unsafe_allow_html=True)
                     else:
                         st.error("Failed to process image for Swin")
+                else:
+                    st.warning("Swin model not found. Ensure runs/models/swin/best_model_cpu.pth exists.")
             
             # Display overall verdict
-            if prediction == "FAKE":
+            if swin_pred == "FAKE":
                 overall_prediction = "FAKE"
             
+            if efficientnet_pred is None and swin_pred is None:
+                st.error("No models loaded. Upload weights or set Kaggle credentials to download them automatically.")
+                return
+
             st.markdown(f"""
             <div style='
                 background-color: {"rgba(255, 68, 68, 0.1)" if overall_prediction == "FAKE" else "rgba(0, 255, 157, 0.1)"};
