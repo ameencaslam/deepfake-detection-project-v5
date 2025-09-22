@@ -34,6 +34,9 @@ def ensure_kaggle_credentials():
         username, key = None, None
 
     if username and key:
+        # Export env vars for Kaggle CLI and write kaggle.json for redundancy
+        os.environ["KAGGLE_USERNAME"] = str(username)
+        os.environ["KAGGLE_KEY"] = str(key)
         try:
             kaggle_dir.mkdir(parents=True, exist_ok=True)
             with kaggle_json.open('w') as f:
@@ -46,9 +49,19 @@ def ensure_kaggle_credentials():
 # For streamlit web deployement, remove if using in localhost or uncomment the line below
 #os.makedirs("runs", exist_ok=True)
 if not os.path.exists("runs"):
+    st.info("Initializing models (first run). Preparing Kaggle credentials...")
     ensure_kaggle_credentials()
+    # Sanity check: show where we expect the creds file (without revealing contents)
     try:
-        subprocess.run(['bash', 'setup.sh'], check=True)
+        creds_path = Path.home() / ".kaggle" / "kaggle.json"
+        st.write(f"Kaggle credentials file present: {creds_path.exists()}")
+    except Exception:
+        pass
+    try:
+        project_dir = Path(__file__).parent
+        st.info("Downloading model weights from Kaggle (this may take a few minutes)...")
+        subprocess.run(['bash', 'setup.sh'], check=True, cwd=str(project_dir))
+        st.success("Models downloaded and extracted.")
     except subprocess.CalledProcessError as e:
         st.error(f"Error running setup script: {str(e)}")
         st.stop()
