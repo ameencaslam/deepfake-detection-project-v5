@@ -44,27 +44,36 @@ def ensure_kaggle_credentials():
         except Exception as e:
             st.warning(f"Could not write Kaggle credentials file: {e}")
 
+    # Return whether we have credentials available one way or another
+    return bool(os.getenv("KAGGLE_USERNAME")) and bool(os.getenv("KAGGLE_KEY")) or kaggle_json.exists()
+
 # Run setup script if models don't exist
 # You can download the model from kaggle 
 # For streamlit web deployement, remove if using in localhost or uncomment the line below
 #os.makedirs("runs", exist_ok=True)
 if not os.path.exists("runs"):
     st.info("Initializing models (first run). Preparing Kaggle credentials...")
-    ensure_kaggle_credentials()
-    # Sanity check: show where we expect the creds file (without revealing contents)
+    creds_ok = ensure_kaggle_credentials()
+    # Sanity check booleans (no secrets printed)
     try:
+        st.write(f"Secrets present: {bool(hasattr(st, 'secrets') and st.secrets.get('KAGGLE_USERNAME') and st.secrets.get('KAGGLE_KEY'))}")
         creds_path = Path.home() / ".kaggle" / "kaggle.json"
         st.write(f"Kaggle credentials file present: {creds_path.exists()}")
+        st.write(f"Env vars present: {bool(os.getenv('KAGGLE_USERNAME')) and bool(os.getenv('KAGGLE_KEY'))}")
     except Exception:
         pass
-    try:
-        project_dir = Path(__file__).parent
-        st.info("Downloading model weights from Kaggle (this may take a few minutes)...")
-        subprocess.run(['bash', 'setup.sh'], check=True, cwd=str(project_dir))
-        st.success("Models downloaded and extracted.")
-    except subprocess.CalledProcessError as e:
-        st.error(f"Error running setup script: {str(e)}")
-        st.stop()
+
+    if creds_ok:
+        try:
+            project_dir = Path(__file__).parent
+            st.info("Downloading model weights from Kaggle (this may take a few minutes)...")
+            subprocess.run(['bash', 'setup.sh'], check=True, cwd=str(project_dir))
+            st.success("Models downloaded and extracted.")
+        except subprocess.CalledProcessError as e:
+            st.error(f"Error running setup script: {str(e)}")
+            # Do not stop the app; let UI load so users see guidance
+    else:
+        st.warning("Kaggle credentials not detected. Set KAGGLE_USERNAME and KAGGLE_KEY in Streamlit Secrets to enable automatic model download, or upload models to runs/models/... manually.")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
